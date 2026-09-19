@@ -13,11 +13,9 @@ export class HistoryService {
   ) {}
 
   save(type: RecordType, input: unknown, output: unknown) {
-    return this.repo.save({
-      type,
-      input,
-      output: snapshotOutput(output),
-    });
+    // 原样落库：温度全程为热力学温度 K，不做任何单位换算；
+    // 深拷贝由仓库层负责（内存实现 structuredClone，TypeORM 序列化进 jsonb）
+    return this.repo.save({ type, input, output });
   }
 
   async find(query: HistoryQuery): Promise<{
@@ -32,23 +30,4 @@ export class HistoryService {
     ]);
     return { items, total, limit: query.limit, offset: query.offset };
   }
-}
-
-function snapshotOutput(output: unknown): unknown {
-  const cloned = structuredClone(output);
-  toEngineeringTemperature(cloned);
-  return cloned;
-}
-
-function toEngineeringTemperature(node: unknown): void {
-  if (node === null || typeof node !== 'object') return;
-  if (Array.isArray(node)) {
-    for (const item of node) toEngineeringTemperature(item);
-    return;
-  }
-  const obj = node as Record<string, unknown>;
-  if (typeof obj.temperature === 'number' && Number.isFinite(obj.temperature)) {
-    obj.temperature -= 273.15;
-  }
-  for (const value of Object.values(obj)) toEngineeringTemperature(value);
 }

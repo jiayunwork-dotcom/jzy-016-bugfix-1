@@ -249,6 +249,77 @@ describe('布雷顿循环服务 (e2e)', () => {
     });
   });
 
+  describe('历史快照与现场响应一致（状态点温度，K）', () => {
+    test('单点实际循环：历史四状态点与现场一致，并与同记录 input/部件结果同源', async () => {
+      // turbineInletTemperature 取 1401 只为在历史里唯一定位本条记录；
+      // 压气机出口温度只取决于 T1/压比/效率，与 T3 无关
+      const live = await request(server)
+        .post('/cycles/actual')
+        .send({ ...goodCase, turbineInletTemperature: 1401 })
+        .expect(200);
+
+      const res = await request(server)
+        .get(
+          '/cycles/history?type=cycle&pressureRatio=12&turbineInletTemperature=1401',
+        )
+        .expect(200);
+      expect(res.body.total).toBe(1);
+      const record = res.body.items[0];
+
+      // 历史快照与现场响应逐点一致：热力学温度 K，落库不被换算
+      expect(record.output.states).toEqual(live.body.states);
+      expect(record.output.states.compressorInlet.temperature).toBe(300);
+      expect(record.output.states.compressorOutlet.temperature).toBeCloseTo(
+        660.7,
+        1,
+      );
+      expect(record.output.states.turbineInlet.temperature).toBe(1401);
+
+      // 与同一条记录 input / 部件结果里的温度字段是同一套温度
+      expect(record.input.ambientTemperature).toBe(300);
+      expect(record.output.states.compressorInlet.temperature).toBe(
+        record.input.ambientTemperature,
+      );
+      expect(record.output.states.turbineInlet.temperature).toBe(
+        record.input.turbineInletTemperature,
+      );
+      expect(record.output.states.compressorInlet.temperature).toBe(
+        record.output.compressor.inletTemperature,
+      );
+      expect(record.output.states.compressorOutlet.temperature).toBe(
+        record.output.compressor.actualExitTemperature,
+      );
+      expect(record.output.states.turbineInlet.temperature).toBe(
+        record.output.turbine.inletTemperature,
+      );
+      expect(record.output.states.exhaust.temperature).toBe(
+        record.output.turbine.actualExitTemperature,
+      );
+    });
+
+    test('批量唯一一组：历史里成功组的状态点与批量现场结果一致', async () => {
+      const live = await request(server)
+        .post('/cycles/batch')
+        .send({ cases: [{ ...goodCase, turbineInletTemperature: 1402 }] })
+        .expect(200);
+      expect(live.body.succeeded).toBe(1);
+      const liveStates = live.body.cases[0].result.states;
+
+      const res = await request(server)
+        .get('/cycles/history?type=batch&turbineInletTemperature=1402')
+        .expect(200);
+      expect(res.body.total).toBe(1);
+      const persistedCase = res.body.items[0].output.cases[0];
+      expect(persistedCase.ok).toBe(true);
+      expect(persistedCase.result.states).toEqual(liveStates);
+      expect(persistedCase.result.states.compressorInlet.temperature).toBe(300);
+      expect(
+        persistedCase.result.states.compressorOutlet.temperature,
+      ).toBeCloseTo(660.7, 1);
+      expect(persistedCase.result.states.turbineInlet.temperature).toBe(1402);
+    });
+  });
+
   describe('并发互不串扰 (HTTP)', () => {
     test('30 路并发 actual 请求各自结果正确、历史无丢失', async () => {
       const ratios = Array.from({ length: 30 }, (_, i) => 2 + i * 0.9);

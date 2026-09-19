@@ -7,6 +7,7 @@ import { PersistenceModule } from '../src/persistence/persistence.module';
 import { InMemoryHistoryRepository } from '../src/persistence/repositories/in-memory-history.repository';
 import { HISTORY_REPOSITORY } from '../src/persistence/history.repository';
 import { ValidationException } from '../src/calculations/validation.exception';
+import { CycleResult } from '../src/thermo';
 
 async function buildApp() {
   const moduleRef = await Test.createTestingModule({
@@ -143,6 +144,79 @@ describe('历史持久化', () => {
     ).rejects.toBeInstanceOf(ValidationException);
     const page = await history.find({ limit: 50, offset: 0 });
     expect(page.total).toBe(0);
+  });
+
+  test('历史快照与现场响应一致：状态点温度保持 K，且与同记录其他温度字段同源', async () => {
+    const { cycles, history } = await buildApp();
+    const live = await cycles.computeActual(goodCase);
+
+    const page = await history.find({ type: 'cycle', limit: 10, offset: 0 });
+    expect(page.total).toBe(1);
+    const record = page.items[0];
+    const persisted = record.output as CycleResult;
+    const input = record.input as {
+      ambientTemperature: number;
+      turbineInletTemperature: number;
+    };
+
+    // 快照与现场响应逐点一致：热力学温度 K，落库不被换算
+    expect(persisted.states).toEqual(live.states);
+    expect(persisted.states.compressorInlet.temperature).toBe(300);
+    expect(persisted.states.compressorOutlet.temperature).toBeCloseTo(660.7, 1);
+    expect(persisted.states.turbineInlet.temperature).toBe(1400);
+    expect(persisted.states.exhaust.temperature).toBeCloseTo(759.5, 1);
+
+    // 与同一条记录 input / 部件结果里的温度字段是同一套温度
+    expect(persisted.states.compressorInlet.temperature).toBe(
+      input.ambientTemperature,
+    );
+    expect(persisted.states.turbineInlet.temperature).toBe(
+      input.turbineInletTemperature,
+    );
+    expect(persisted.states.compressorInlet.temperature).toBe(
+      persisted.compressor.inletTemperature,
+    );
+    expect(persisted.states.compressorOutlet.temperature).toBe(
+      persisted.compressor.actualExitTemperature,
+    );
+    expect(persisted.states.turbineInlet.temperature).toBe(
+      persisted.turbine.inletTemperature,
+    );
+    expect(persisted.states.exhaust.temperature).toBe(
+      persisted.turbine.actualExitTemperature,
+    );
+  });
+
+  test('理想循环与批量成功组的历史状态点同样与现场一致', async () => {
+    const { cycles, history } = await buildApp();
+    const idealLive = await cycles.computeIdeal({
+      pressureRatio: 12,
+      ambientTemperature: 300,
+      turbineInletTemperature: 1400,
+      gamma: 1.4,
+    });
+    const batchLive = await cycles.batch({ cases: [goodCase] });
+
+    const cyclePage = await history.find({ type: 'cycle', limit: 10, offset: 0 });
+    expect(cyclePage.total).toBe(1);
+    const idealPersisted = cyclePage.items[0].output as CycleResult;
+    expect(idealPersisted.states).toEqual(idealLive.states);
+    expect(idealPersisted.states.compressorInlet.temperature).toBe(300);
+
+    const batchPage = await history.find({ type: 'batch', limit: 10, offset: 0 });
+    expect(batchPage.total).toBe(1);
+    const persistedCases = (
+      batchPage.items[0].output as {
+        cases: Array<{ ok: boolean; result?: CycleResult }>;
+      }
+    ).cases;
+    const liveOk = batchLive.cases[0];
+    expect(liveOk.ok).toBe(true);
+    expect(persistedCases[0].ok).toBe(true);
+    expect(persistedCases[0].result?.states).toEqual(liveOk.result?.states);
+    expect(
+      persistedCases[0].result?.states.compressorInlet.temperature,
+    ).toBe(300);
   });
 });
 
