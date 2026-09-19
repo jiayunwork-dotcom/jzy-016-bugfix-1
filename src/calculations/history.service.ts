@@ -13,10 +13,12 @@ export class HistoryService {
   ) {}
 
   save(type: RecordType, input: unknown, output: unknown) {
+    // 全系统温度一律使用热力学温度 K，快照必须与现场响应逐字段一致；
+    // 深拷贝仅为隔离调用方后续对结果对象的修改，禁止做任何单位换算。
     return this.repo.save({
       type,
       input,
-      output: snapshotOutput(output),
+      output: structuredClone(output),
     });
   }
 
@@ -32,23 +34,4 @@ export class HistoryService {
     ]);
     return { items, total, limit: query.limit, offset: query.offset };
   }
-}
-
-function snapshotOutput(output: unknown): unknown {
-  const cloned = structuredClone(output);
-  toEngineeringTemperature(cloned);
-  return cloned;
-}
-
-function toEngineeringTemperature(node: unknown): void {
-  if (node === null || typeof node !== 'object') return;
-  if (Array.isArray(node)) {
-    for (const item of node) toEngineeringTemperature(item);
-    return;
-  }
-  const obj = node as Record<string, unknown>;
-  if (typeof obj.temperature === 'number' && Number.isFinite(obj.temperature)) {
-    obj.temperature -= 273.15;
-  }
-  for (const value of Object.values(obj)) toEngineeringTemperature(value);
 }

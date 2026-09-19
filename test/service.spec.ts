@@ -144,6 +144,135 @@ describe('历史持久化', () => {
     const page = await history.find({ limit: 50, offset: 0 });
     expect(page.total).toBe(0);
   });
+
+  test('回归：单点实际循环历史快照的四状态点温度与现场响应一致（K，不得减 273.15）', async () => {
+    const { cycles, history } = await buildApp();
+    const live = await cycles.computeActual(goodCase);
+
+    const page = await history.find({
+      type: 'cycle',
+      pressureRatio: goodCase.pressureRatio,
+      limit: 50,
+      offset: 0,
+    });
+    expect(page.total).toBe(1);
+    const snap = page.items[0].output as typeof live;
+
+    // 现场与历史逐状态点温度完全一致
+    const stateKeys = [
+      'compressorInlet',
+      'compressorOutlet',
+      'turbineInlet',
+      'exhaust',
+    ] as const;
+    for (const key of stateKeys) {
+      expect(snap.states[key].temperature).toBeCloseTo(
+        live.states[key].temperature,
+        12,
+      );
+    }
+
+    // 复现参数下的具体数值：300 / ≈660.7 / 1400 / ≈759.5（开尔文）
+    expect(snap.states.compressorInlet.temperature).toBe(300);
+    expect(snap.states.compressorOutlet.temperature).toBeCloseTo(660.7, 1);
+    expect(snap.states.turbineInlet.temperature).toBe(1400);
+    expect(snap.states.exhaust.temperature).toBeCloseTo(759.5, 1);
+
+    // 与同一条记录 input / 部件结果温度字段不分叉
+    expect(snap.states.compressorInlet.temperature).toBe(
+      (page.items[0].input as { ambientTemperature: number }).ambientTemperature,
+    );
+    expect(snap.states.turbineInlet.temperature).toBe(
+      (page.items[0].input as { turbineInletTemperature: number })
+        .turbineInletTemperature,
+    );
+    expect(snap.states.compressorInlet.temperature).toBe(
+      snap.compressor.inletTemperature,
+    );
+    expect(snap.states.compressorOutlet.temperature).toBe(
+      snap.compressor.actualExitTemperature,
+    );
+    expect(snap.states.turbineInlet.temperature).toBe(
+      snap.turbine.inletTemperature,
+    );
+    expect(snap.states.exhaust.temperature).toBe(
+      snap.turbine.actualExitTemperature,
+    );
+    // 其余热力量不受影响
+    expect(snap.netWork).toBe(live.netWork);
+    expect(snap.heatAdded).toBe(live.heatAdded);
+    expect(snap.thermalEfficiency).toBe(live.thermalEfficiency);
+    expect(snap.states.compressorOutlet.relativePressure).toBe(
+      live.states.compressorOutlet.relativePressure,
+    );
+  });
+
+  test('回归：理想循环历史快照状态点温度同样保持开尔文、与现场一致', async () => {
+    const { cycles, history } = await buildApp();
+    const live = await cycles.computeIdeal({
+      pressureRatio: 12,
+      ambientTemperature: 300,
+      turbineInletTemperature: 1400,
+      gamma: 1.4,
+    });
+
+    const page = await history.find({ type: 'cycle', limit: 50, offset: 0 });
+    const snap = page.items[0].output as typeof live;
+    expect(snap.states.compressorInlet.temperature).toBe(300);
+    expect(snap.states.compressorOutlet.temperature).toBeCloseTo(
+      live.states.compressorOutlet.temperature,
+      12,
+    );
+    expect(snap.states.turbineInlet.temperature).toBe(1400);
+    expect(snap.states.exhaust.temperature).toBeCloseTo(
+      live.states.exhaust.temperature,
+      12,
+    );
+    expect(snap.states.exhaust.temperature).toBe(snap.turbine.actualExitTemperature);
+  });
+
+  test('回归：批量历史中成功组的状态点温度与现场/部件结果一致', async () => {
+    const { cycles, history } = await buildApp();
+    const liveBatch = await cycles.batch({ cases: [goodCase] });
+    const liveCase = liveBatch.cases[0].result!;
+
+    const page = await history.find({
+      type: 'batch',
+      pressureRatio: goodCase.pressureRatio,
+      limit: 50,
+      offset: 0,
+    });
+    expect(page.total).toBe(1);
+    const out = page.items[0].output as {
+      cases: Array<{ ok: boolean; result?: typeof liveCase }>;
+    };
+    expect(out.cases[0].ok).toBe(true);
+    const snapCase = out.cases[0].result!;
+
+    expect(snapCase.states.compressorInlet.temperature).toBe(300);
+    expect(snapCase.states.compressorOutlet.temperature).toBeCloseTo(
+      liveCase.states.compressorOutlet.temperature,
+      12,
+    );
+    expect(snapCase.states.turbineInlet.temperature).toBe(1400);
+    expect(snapCase.states.exhaust.temperature).toBeCloseTo(
+      liveCase.states.exhaust.temperature,
+      12,
+    );
+    expect(snapCase.states.compressorOutlet.temperature).toBeCloseTo(660.7, 1);
+    expect(snapCase.states.compressorInlet.temperature).toBe(
+      snapCase.compressor.inletTemperature,
+    );
+    expect(snapCase.states.compressorOutlet.temperature).toBe(
+      snapCase.compressor.actualExitTemperature,
+    );
+    expect(snapCase.states.turbineInlet.temperature).toBe(
+      snapCase.turbine.inletTemperature,
+    );
+    expect(snapCase.states.exhaust.temperature).toBe(
+      snapCase.turbine.actualExitTemperature,
+    );
+  });
 });
 
 describe('并发：多路请求结果互不干扰、历史不错乱', () => {
