@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: brayton-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: brayton
+      POSTGRES_PASSWORD: brayton_secret
+      POSTGRES_DB: brayton
+    ports:
+      - '${DB_PORT:-5432}:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U brayton -d brayton']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: brayton-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: brayton
+      DB_PASSWORD: brayton_secret
+      DB_NAME: brayton
+      DB_SYNCHRONIZE: 'true'
+    ports:
+      - '${API_PORT:-3000}:3000'
+
+volumes:
+  pgdata:
